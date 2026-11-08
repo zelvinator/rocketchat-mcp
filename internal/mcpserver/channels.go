@@ -162,7 +162,7 @@ func channelText(rooms []channelInfo) string {
 
 	var text strings.Builder
 	for _, room := range rooms {
-		fmt.Fprintf(&text, "%s (%s, %d messages", room.Name, room.Type, room.Messages)
+		fmt.Fprintf(&text, "%s (id %s, %s, %d messages", room.Name, room.ID, room.Type, room.Messages)
 		if room.Users > 0 {
 			fmt.Fprintf(&text, ", %d users", room.Users)
 		}

@@ -1,6 +1,9 @@
 package mcpserver
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestListChannels(t *testing.T) {
 	session := connect(t, newFakeRocketChat(t, false), "user-1", "token-1")
@@ -49,6 +52,13 @@ func TestListChannels(t *testing.T) {
 	}
 	if alerts.LastMessageAt != "2026-11-08T12:00:00Z" {
 		t.Errorf("alerts last message = %q", alerts.LastMessageAt)
+	}
+
+	text := textOf(result)
+	for _, roomID := range []string{"id C1", "id G1"} {
+		if !strings.Contains(text, roomID) {
+			t.Errorf("content = %q, want it to contain %q", text, roomID)
+		}
 	}
 }
 

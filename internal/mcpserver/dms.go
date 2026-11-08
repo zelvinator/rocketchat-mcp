@@ -120,7 +120,7 @@ func dmText(dms []dmInfo) string {
 
 	var text strings.Builder
 	for _, dm := range dms {
-		fmt.Fprintf(&text, "%s (DM, %d messages", dm.Name, dm.Messages)
+		fmt.Fprintf(&text, "%s (id %s, DM, %d messages", dm.Name, dm.ID, dm.Messages)
 		if dm.LastMessageAt != "" {
 			fmt.Fprintf(&text, ", last message %s", dm.LastMessageAt)
 		}

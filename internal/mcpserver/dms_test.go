@@ -39,6 +39,9 @@ func TestListDMs(t *testing.T) {
 	if text := textOf(result); !strings.Contains(text, "alice, bob") {
 		t.Errorf("content = %q, want the participant names", text)
 	}
+	if text := textOf(result); !strings.Contains(text, "id D1") {
+		t.Errorf("content = %q, want the room ID", text)
+	}
 }
 
 func TestListDMsWithoutCredentials(t *testing.T) {
