@@ -21,6 +21,19 @@ internal/mcpserver/    MCP server construction and Rocket.Chat tools
 
 - Go 1.25 or later
 
+## Install
+
+Prebuilt binaries for Linux, macOS, and Windows (amd64 and arm64) are attached
+to each [release](https://github.com/zelvinator/rocketchat-mcp/releases). Each
+release ships `tar.gz` (or `zip` on Windows) archives and a `checksums.txt`.
+
+```sh
+curl -LO https://github.com/zelvinator/rocketchat-mcp/releases/latest/download/rocketchat-mcp_0.1.0_linux_amd64.tar.gz
+curl -LO https://github.com/zelvinator/rocketchat-mcp/releases/latest/download/checksums.txt
+sha256sum -c --ignore-missing checksums.txt
+tar -xzf rocketchat-mcp_0.1.0_linux_amd64.tar.gz
+```
+
 ## Build and run
 
 ```sh
