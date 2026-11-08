@@ -16,7 +16,6 @@ import (
 
 	"forgejo.srv.hnatekmar.dev/hnatekmar/rocketchat-mcp/internal/config"
 	"forgejo.srv.hnatekmar.dev/hnatekmar/rocketchat-mcp/internal/mcpserver"
-	"forgejo.srv.hnatekmar.dev/hnatekmar/rocketchat-mcp/internal/rocketchat"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -63,14 +62,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	client, err := rocketchat.New(cfg.RocketChatURL, cfg.UserID, cfg.AuthToken)
-	if err != nil {
-		return err
-	}
 
-	server := mcpserver.New(client, mcpserver.Options{
-		Version: version,
-		Logger:  logger,
+	server := mcpserver.New(mcpserver.Options{
+		RocketChatURL: cfg.RocketChatURL,
+		UserID:        cfg.UserID,
+		AuthToken:     cfg.AuthToken,
+		Version:       version,
+		Logger:        logger,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
