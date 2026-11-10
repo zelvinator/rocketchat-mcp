@@ -41,3 +41,4 @@ You can now use Rocket.Chat tools in your MCP client.
 | `rocketchat_list_channels` | List public channels and optional private groups. Includes creation, update, and last-message times. |
 | `rocketchat_list_dms` | List direct message rooms, most recent first. |
 | `rocketchat_list_messages` | List messages with cursor pagination. Supports channels, private groups, and direct messages. |
+| `rocketchat_search_messages` | Search one room by text and/or author. Accepts Rocket.Chat filters (`from:`, `mention:`, `before:`, `after:`, `on:`, `has:star`, `is:pinned`, `order:`) and pages with `offset`. |

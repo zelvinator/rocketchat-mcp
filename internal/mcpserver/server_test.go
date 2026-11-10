@@ -107,11 +107,12 @@ func TestListTools(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"ping":                     false,
-		"rocketchat_me":            false,
-		"rocketchat_list_channels": false,
-		"rocketchat_list_dms":      false,
-		"rocketchat_list_messages": false,
+		"ping":                       false,
+		"rocketchat_me":              false,
+		"rocketchat_list_channels":   false,
+		"rocketchat_list_dms":        false,
+		"rocketchat_list_messages":   false,
+		"rocketchat_search_messages": false,
 	}
 	for _, tool := range result.Tools {
 		if _, ok := want[tool.Name]; ok {
@@ -342,6 +343,12 @@ func newFakeRocketChat(t *testing.T, failMe bool) string {
 			writeHistory(w, r, groupMessages)
 		case "/api/v1/im.history":
 			writeHistory(w, r, dmMessages)
+		case "/api/v1/chat.search":
+			writeSearch(w, r, map[string][]map[string]any{
+				"C1": channelMessages,
+				"G1": groupMessages,
+				"D1": dmMessages,
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -349,6 +356,67 @@ func newFakeRocketChat(t *testing.T, failMe bool) string {
 	t.Cleanup(server.Close)
 
 	return server.URL
+}
+
+// writeSearch reproduces the parts of Rocket.Chat 7's chat.search route that
+// the client has to respect: the schema allows only roomId, searchText, count
+// and offset (additionalProperties is false), searchText is required, and a
+// from:<username> token narrows the results to that author.
+func writeSearch(w http.ResponseWriter, r *http.Request, rooms map[string][]map[string]any) {
+	allowed := map[string]bool{"roomId": true, "searchText": true, "count": true, "offset": true}
+	for key := range r.URL.Query() {
+		if !allowed[key] {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "unknown query param " + key})
+			return
+		}
+	}
+
+	roomID := r.URL.Query().Get("roomId")
+	searchText := strings.TrimSpace(r.URL.Query().Get("searchText"))
+	if roomID == "" || searchText == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "roomId and searchText are required"})
+		return
+	}
+
+	authors := map[string]bool{}
+	text := searchText
+	for {
+		match := fromPattern.FindStringSubmatch(text)
+		if match == nil {
+			break
+		}
+		authors[strings.ToLower(match[0][len("from:"):])] = true
+		text = strings.Replace(text, match[0], "", 1)
+	}
+	text = strings.TrimSpace(text)
+
+	matches := make([]map[string]any, 0, len(rooms[roomID]))
+	for _, message := range rooms[roomID] {
+		author := strings.ToLower(message["u"].(map[string]any)["username"].(string))
+		if len(authors) > 0 && !authors[author] {
+			continue
+		}
+		if text != "" && !strings.Contains(strings.ToLower(message["msg"].(string)), strings.ToLower(text)) {
+			continue
+		}
+		matches = append(matches, message)
+	}
+
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
+	if count <= 0 {
+		count = 50
+	}
+	if offset >= len(matches) {
+		matches = matches[:0]
+	} else {
+		matches = matches[offset:]
+		if len(matches) > count {
+			matches = matches[:count]
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"messages": matches, "success": true})
 }
 
 func writeHistory(w http.ResponseWriter, r *http.Request, messages []map[string]any) {
