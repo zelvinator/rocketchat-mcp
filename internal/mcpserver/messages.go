@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,15 @@ const (
 	defaultMessageLimit = 50
 	maxMessageLimit     = 100
 )
+
+// usernamePattern is the character set Rocket.Chat's from: filter parses.
+// A username outside it would not survive the filter, so it is rejected here
+// instead of turning into a full-text search for the literal string.
+var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// fromPattern finds a from: filter anywhere in the query, the same way
+// Rocket.Chat's parser does.
+var fromPattern = regexp.MustCompile(`(?i)from:[a-z0-9._-]+`)
 
 type listMessagesArgs struct {
 	RoomID string `json:"room_id" jsonschema:"ID of the channel or private group"`
@@ -48,6 +58,25 @@ type listMessagesOutput struct {
 	Messages   []messageInfo `json:"messages" jsonschema:"newest messages first"`
 	NextBefore string        `json:"next_before,omitempty" jsonschema:"cursor for the next older page"`
 	HasMore    bool          `json:"has_more" jsonschema:"true when this page is full and older messages may exist"`
+}
+
+type searchMessagesArgs struct {
+	RoomID string `json:"room_id" jsonschema:"ID of the channel, private group, or direct message to search"`
+	Query  string `json:"query,omitempty" jsonschema:"Rocket.Chat search text; supports filters such as from:<username>, mention:<username>, before/after/on:DD/MM/YYYY, has:star, has:url, is:pinned, and order:asc|desc. Quote a phrase to match it whole."`
+	Author string `json:"author,omitempty" jsonschema:"only messages by this username; shorthand for from:<username>"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"results per page (default 50, max 100)"`
+	Offset int    `json:"offset,omitempty" jsonschema:"results to skip; pass next_offset from the previous page"`
+}
+
+type searchMessagesOutput struct {
+	Messages   []messageInfo `json:"messages" jsonschema:"newest matching messages first"`
+	NextOffset int           `json:"next_offset,omitempty" jsonschema:"offset for the next result page"`
+	HasMore    bool          `json:"has_more" jsonschema:"true when this page is full and more matches may exist"`
+}
+
+type searchResponse struct {
+	Messages []historyMessage `json:"messages"`
+	Success  bool             `json:"success"`
 }
 
 type roomInfoResponse struct {
@@ -92,6 +121,18 @@ func addMessageTools(server *mcp.Server, api *rocketAPI, hasCredentials bool) {
 			return nil, listMessagesOutput{}, ErrNoCredentials
 		}
 		return listMessages(ctx, api, args)
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "rocketchat_search_messages",
+		Title:       "Rocket.Chat: search messages",
+		Description: "Search messages in one room, newest first. Search is per room: get the room ID from rocketchat_list_channels or rocketchat_list_dms. query accepts Rocket.Chat search syntax, including the filters from:<username>, mention:<username>, before/after/on:DD/MM/YYYY, has:star, has:url, is:pinned, and order:asc|desc; put a phrase in double quotes to match it whole. author is shorthand for from:<username> and works on its own to list one person's messages. Page with offset and next_offset.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args searchMessagesArgs) (*mcp.CallToolResult, searchMessagesOutput, error) {
+		if !hasCredentials {
+			return nil, searchMessagesOutput{}, ErrNoCredentials
+		}
+		return searchMessages(ctx, api, args)
 	})
 }
 
@@ -156,17 +197,7 @@ func listMessages(ctx context.Context, api *rocketAPI, args listMessagesArgs) (*
 		return nil, listMessagesOutput{}, fmt.Errorf("%w: %s returned success=false", ErrRequestFailed, path)
 	}
 
-	messages := make([]messageInfo, 0, len(history.Messages))
-	for _, message := range history.Messages {
-		messages = append(messages, messageInfo{
-			ID:          message.ID,
-			Author:      message.User.Username,
-			AuthorName:  message.User.Name,
-			Text:        message.Text,
-			Timestamp:   message.Timestamp.UTC().Format(time.RFC3339),
-			Attachments: message.Attachments,
-		})
-	}
+	messages := newMessageInfos(history.Messages)
 
 	output := listMessagesOutput{
 		Messages: messages,
@@ -180,6 +211,81 @@ func listMessages(ctx context.Context, api *rocketAPI, args listMessagesArgs) (*
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: messageText(output)}},
 	}, output, nil
+}
+
+func searchMessages(ctx context.Context, api *rocketAPI, args searchMessagesArgs) (*mcp.CallToolResult, searchMessagesOutput, error) {
+	if args.RoomID == "" {
+		return nil, searchMessagesOutput{}, errors.New("room_id is required")
+	}
+
+	query := strings.TrimSpace(args.Query)
+	author := strings.TrimSpace(args.Author)
+	if author != "" {
+		if !usernamePattern.MatchString(author) {
+			return nil, searchMessagesOutput{}, fmt.Errorf("author %q is not a valid Rocket.Chat username", author)
+		}
+		if fromPattern.MatchString(query) {
+			return nil, searchMessagesOutput{}, errors.New("query already has a from: filter; use either author or from:<username>, not both")
+		}
+		if query == "" {
+			query = "from:" + author
+		} else {
+			query += " from:" + author
+		}
+	}
+	if query == "" {
+		return nil, searchMessagesOutput{}, errors.New("query or author is required")
+	}
+
+	limit := clampLimit(args.Limit, defaultMessageLimit, maxMessageLimit)
+	if args.Offset < 0 {
+		return nil, searchMessagesOutput{}, errors.New("offset must not be negative")
+	}
+
+	// chat.search takes only roomId, searchText, count and offset; anything
+	// else is rejected by the route schema, so time bounds and author filtering
+	// have to travel inside searchText.
+	params := url.Values{
+		"roomId":     {args.RoomID},
+		"searchText": {query},
+		"count":      {strconv.Itoa(limit)},
+		"offset":     {strconv.Itoa(args.Offset)},
+	}
+
+	var response searchResponse
+	if err := api.get(ctx, "chat.search", params, &response); err != nil {
+		return nil, searchMessagesOutput{}, fmt.Errorf("search messages: %w", err)
+	}
+	if !response.Success {
+		return nil, searchMessagesOutput{}, fmt.Errorf("%w: chat.search returned success=false", ErrRequestFailed)
+	}
+
+	output := searchMessagesOutput{
+		Messages: newMessageInfos(response.Messages),
+		HasMore:  len(response.Messages) == limit,
+	}
+	if output.HasMore {
+		output.NextOffset = args.Offset + len(response.Messages)
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: searchMessageText(output)}},
+	}, output, nil
+}
+
+func newMessageInfos(messages []historyMessage) []messageInfo {
+	converted := make([]messageInfo, 0, len(messages))
+	for _, message := range messages {
+		converted = append(converted, messageInfo{
+			ID:          message.ID,
+			Author:      message.User.Username,
+			AuthorName:  message.User.Name,
+			Text:        message.Text,
+			Timestamp:   message.Timestamp.UTC().Format(time.RFC3339),
+			Attachments: message.Attachments,
+		})
+	}
+	return converted
 }
 
 func parseOptionalTime(value string) (time.Time, error) {
@@ -201,18 +307,34 @@ func messageText(output listMessagesOutput) string {
 	}
 
 	var text strings.Builder
-	for _, message := range output.Messages {
-		fmt.Fprintf(&text, "%s %s: %s", message.Timestamp, message.Author, message.Text)
-		for _, attachment := range message.Attachments {
-			if attachment.Title != "" {
-				fmt.Fprintf(&text, " [%s]", attachment.Title)
-			}
-		}
-		text.WriteString("\n")
-	}
-
+	writeMessageLines(&text, output.Messages)
 	if output.HasMore && output.NextBefore != "" {
 		fmt.Fprintf(&text, "\nNext page: use before=%s\n", output.NextBefore)
 	}
 	return text.String()
+}
+
+func searchMessageText(output searchMessagesOutput) string {
+	if len(output.Messages) == 0 {
+		return "No messages found."
+	}
+
+	var text strings.Builder
+	writeMessageLines(&text, output.Messages)
+	if output.HasMore {
+		fmt.Fprintf(&text, "\nNext page: use offset=%d\n", output.NextOffset)
+	}
+	return text.String()
+}
+
+func writeMessageLines(text *strings.Builder, messages []messageInfo) {
+	for _, message := range messages {
+		fmt.Fprintf(text, "%s %s: %s", message.Timestamp, message.Author, message.Text)
+		for _, attachment := range message.Attachments {
+			if attachment.Title != "" {
+				fmt.Fprintf(text, " [%s]", attachment.Title)
+			}
+		}
+		text.WriteString("\n")
+	}
 }

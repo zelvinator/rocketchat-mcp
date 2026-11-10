@@ -59,7 +59,7 @@ func New(opts Options) *mcp.Server {
 		Title:   "Rocket.Chat MCP",
 		Version: opts.Version,
 	}, &mcp.ServerOptions{
-		Instructions: "Tools for a Rocket.Chat workspace. Use rocketchat_list_channels and rocketchat_list_dms to find room IDs, then rocketchat_list_messages to read messages. Call rocketchat_me to check the configured credentials.",
+		Instructions: "Tools for a Rocket.Chat workspace. Use rocketchat_list_channels and rocketchat_list_dms to find room IDs, then rocketchat_list_messages to read a room or rocketchat_search_messages to search inside one. Call rocketchat_me to check the configured credentials.",
 		Logger:       opts.Logger,
 	})
 
